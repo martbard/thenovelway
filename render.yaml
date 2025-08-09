@@ -1,7 +1,7 @@
-# render.yaml — Django API on Render (lean + pinned Python)
-# - Uses a small, deploy-only requirements file
-# - Pins Python 3.11 for broad package compatibility
-# - Health-checks /api/ and runs migrations at deploy time
+# render.yaml — Django API on Render (lean, pinned Python, safe build)
+# - Installs from requirements-render.txt (not requirements.txt)
+# - Pins Python 3.11 for wide package support
+# - Health-checks /api/ and runs migrate right before serving traffic
 
 databases:
   - name: royalroad-db
@@ -17,45 +17,46 @@ services:
     autoDeploy: true
     healthCheckPath: /api/
 
-    # Build only what production needs
     buildCommand: |
       pip install -r requirements-render.txt
+      # Ensure Django loads prod settings during collectstatic
+      export DJANGO_SETTINGS_MODULE=royalroad_clone.settings_prod
       python manage.py collectstatic --no-input
 
-    # Run DB migrations just before switching traffic
+    # Run DB migrations in the runtime environment (recommended)
     preDeployCommand: |
       python manage.py migrate
 
-    # IMPORTANT: bind to Render's assigned PORT
+    # Bind to Render's assigned PORT on 0.0.0.0 (required)
     startCommand: gunicorn royalroad_clone.wsgi:application --bind 0.0.0.0:$PORT
 
     envVars:
-      # Pin Python on Render
+      # Pin interpreter on Render (Blueprints support this env var)
       - key: PYTHON_VERSION
         value: "3.11.11"
 
-      # Use production settings module
+      # Use production settings
       - key: DJANGO_SETTINGS_MODULE
         value: royalroad_clone.settings_prod
 
-      # Wire DATABASE_URL from the managed Postgres
+      # Wire Postgres URL from the managed database
       - key: DATABASE_URL
         fromDatabase:
           name: royalroad-db
           property: connectionString
 
-      # Generate a strong SECRET_KEY on the platform
+      # Generate a strong secret in Render
       - key: SECRET_KEY
         generateValue: true
 
-      # Let Django accept Render subdomains; add custom domains later
+      # Allow Render subdomains; add custom domains later
       - key: ALLOWED_HOSTS
         value: ".onrender.com"
 
-      # Django requires full scheme for trusted origins
+      # Django requires full scheme for trusted origins over HTTPS
       - key: CSRF_TRUSTED_ORIGINS
         value: "https://*.onrender.com"
 
-      # Small instance => 1–2 workers is fine; adjust as needed
+      # Small instance → 1–2 workers is fine
       - key: WEB_CONCURRENCY
         value: "2"
