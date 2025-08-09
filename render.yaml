@@ -1,7 +1,8 @@
 # render.yaml — Django API on Render (fixed)
+# - Pins Python 3.11 for compatibility
 # - Binds Gunicorn to 0.0.0.0:$PORT
 # - Health check hits /api/ (DRF root)
-# - No uvicorn worker needed
+# - Runs migrations in preDeployCommand (runtime)
 
 databases:
   - name: royalroad-db
@@ -16,11 +17,15 @@ services:
     plan: starter
     autoDeploy: true
     healthCheckPath: /api/
+    # branch: main   # (optional) defaults to the branch containing render.yaml
 
     buildCommand: |
       pip install -r requirements.txt
       pip install "whitenoise[brotli]" gunicorn dj-database-url psycopg2-binary
       python manage.py collectstatic --no-input
+
+    # Run DB migrations in the runtime environment, not during build.
+    preDeployCommand: |
       python manage.py migrate
 
     # IMPORTANT: bind to Render's PORT env on 0.0.0.0
@@ -35,8 +40,14 @@ services:
           property: connectionString
       - key: SECRET_KEY
         generateValue: true
-      # allows any *.onrender.com host in your prod settings
+      # Allow Render subdomains; add your custom domain(s) later.
       - key: ALLOWED_HOSTS
         value: ".onrender.com"
+      # Django requires full scheme for trusted origins; wildcard subdomain allowed.
+      - key: CSRF_TRUSTED_ORIGINS
+        value: "https://*.onrender.com"
+      # Pin Python version (Render defaults to 3.13+ for new services).
+      - key: PYTHON_VERSION
+        value: "3.11.11"
       - key: WEB_CONCURRENCY
         value: "2"
