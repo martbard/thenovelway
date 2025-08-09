@@ -1,12 +1,11 @@
-# render.yaml — minimal blueprint to deploy Django on Render
-# Save to: C:\Users\martinb.PERTH\code\royalroad_clone\render.yaml
-# One file handles: DB + Web service + build & start commands.
+# render.yaml — Django API on Render (fixed)
+# - Binds Gunicorn to 0.0.0.0:$PORT
+# - Health check hits /api/ (DRF root)
+# - No uvicorn worker needed
 
 databases:
   - name: royalroad-db
-    # Smallest paid Postgres plan; reliable for small projects.
-    # (Render examples use this identifier.)
-    plan: basic-256mb  # upgrade any time
+    plan: basic-256mb
     databaseName: royalroad
     user: royalroad
 
@@ -14,36 +13,30 @@ services:
   - type: web
     name: royalroad-api
     runtime: python
-    plan: starter           # $7/month web service
+    plan: starter
     autoDeploy: true
+    healthCheckPath: /api/
 
-    # Keep it simple: do everything here, no separate build.sh needed.
     buildCommand: |
       pip install -r requirements.txt
-      # Add deploy-only deps in case they're not in requirements.txt
       pip install "whitenoise[brotli]" gunicorn dj-database-url psycopg2-binary
       python manage.py collectstatic --no-input
       python manage.py migrate
 
-    # Gunicorn (WSGI) + Uvicorn worker (ASGI) per Render's Django guide.
-    startCommand: |
-      python -m gunicorn royalroad_clone.asgi:application -k uvicorn.workers.UvicornWorker
+    # IMPORTANT: bind to Render's PORT env on 0.0.0.0
+    startCommand: gunicorn royalroad_clone.wsgi:application --bind 0.0.0.0:$PORT
 
     envVars:
-      # Use the production settings in this file below
       - key: DJANGO_SETTINGS_MODULE
         value: royalroad_clone.settings_prod
-
-      # Wire DATABASE_URL from the managed Postgres above
       - key: DATABASE_URL
         fromDatabase:
           name: royalroad-db
           property: connectionString
-
-      # Create a proper secret in Render
       - key: SECRET_KEY
         generateValue: true
-
-      # Optional tuning for Gunicorn workers (adjust as you grow)
+      # allows any *.onrender.com host in your prod settings
+      - key: ALLOWED_HOSTS
+        value: ".onrender.com"
       - key: WEB_CONCURRENCY
         value: "2"
