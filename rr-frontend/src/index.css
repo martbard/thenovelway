@@ -1,0 +1,167 @@
+/* src/index.css */
+/* ----- Reset & Base ----- */
+*,
+*::before,
+*::after { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  color: var(--text);
+  background: var(--bg);
+  font-family: "Iowan Old Style","Palatino Linotype",Palatino,"URW Palladio L","Source Serif Pro",Georgia,serif;
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ----- Cozy Bookshop Theme ----- */
+:root {
+  /* Light (Cozy) */
+  --bg: #f7f3ed;           /* parchment */
+  --surface: #fffaf2;      /* cream */
+  --text: #2b2a27;         /* ink */
+  --muted: #5f574f;        /* soft brown */
+  --border: #e7ded3;       /* deckle */
+  --brand: #2f5d50;        /* forest green */
+  --brand-2: #a47148;      /* warm leather */
+  --accent: #b88b4a;       /* brass */
+
+  --radius: 16px;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.06);
+  --shadow-2: 0 12px 32px rgba(0,0,0,.10);
+}
+
+:root.dark {
+  /* Dark Cozy */
+  --bg: #0f1412;           /* deep pine */
+  --surface: #121a18;      /* dark leaf */
+  --text: #e6e1d9;         /* parchment ink */
+  --muted: #b9b1a7;        /* faded parchment */
+  --border: #21302b;       /* pine edge */
+  --brand: #7fc2a8;        /* misted green */
+  --brand-2: #c79a6a;      /* brass light */
+  --accent: #e1b878;
+  --shadow-1: none; --shadow-2: none;
+}
+
+/* ----- Layout Helpers ----- */
+.container { max-width: 1080px; margin-inline: auto; padding-inline: 1rem; }
+.surface   { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-1); }
+.grid      { display: grid; gap: 1rem; }
+.grid.cards { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+
+/* ----- Typography ----- */
+h1, h2, h3 { color: var(--text); margin: 0 0 .4rem 0; }
+h1 { font-size: clamp(1.9rem, 1.2rem + 2vw, 2.7rem); line-height: 1.15; letter-spacing: .2px; }
+h2 { font-size: clamp(1.4rem, 1rem + 1vw, 2rem); }
+h3 { font-size: 1.15rem; }
+
+/* Reading comfort */
+.reading {
+  max-width: 680px;
+  margin: 0 auto;
+  font-size: 1.08rem;
+  line-height: 1.95;
+  word-break: break-word;
+}
+
+/* NEW: richer reading typography */
+.reading p { margin: 0 0 1em; }
+.reading h2, .reading h3 { margin: 1.25em 0 .5em; }
+.reading hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
+.reading blockquote {
+  margin: 1em 0; padding: .6em 1em;
+  border-left: 3px solid var(--brand-2);
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+  border-radius: 10px;
+}
+.reading code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: .95em; background: rgba(127,127,127,.12);
+  padding: .1em .3em; border-radius: 6px;
+}
+.reading pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  background: rgba(127,127,127,.12);
+  padding: .75em; border-radius: 10px; overflow: auto;
+}
+.reading img { max-width: 100%; height: auto; border-radius: 10px; }
+
+/* Reader controls */
+.reader-controls {
+  display: flex; flex-wrap: wrap; gap: .6rem; align-items: center;
+  padding: .6rem; border: 1px solid var(--border); border-radius: 12px;
+  background: color-mix(in oklab, var(--surface) 88%, transparent);
+}
+.reader-controls .select, .reader-controls .input { max-width: 170px; }
+.reader-controls .range { width: 160px; }
+
+/* ----- Links & Buttons ----- */
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: .55rem; padding: .7rem 1rem; border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--brand); color: #fff; font-weight: 700;
+  box-shadow: var(--shadow-1);
+  transition: transform .05s ease, filter .15s ease, background .15s ease;
+}
+.btn:hover { filter: brightness(1.06); text-decoration: none; }
+.btn:active { transform: translateY(1px); }
+.btn.secondary { background: var(--brand-2); }
+.btn.ghost { background: transparent; color: var(--text); }
+.btn.ghost:hover { background: rgba(127,127,127,.08); }
+
+/* ----- Forms ----- */
+.input, .select, .textarea {
+  width: 100%; padding: .8rem .9rem; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+.textarea { min-height: 160px; resize: vertical; }
+.label { display: block; font-weight: 700; margin-bottom: .4rem; color: var(--muted); }
+
+/* ----- Card ----- */
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 1rem; box-shadow: var(--shadow-1);
+}
+.card:hover { box-shadow: var(--shadow-2); }
+
+/* ----- Navbar & Footer ----- */
+.navbar {
+  position: sticky; top: 0; z-index: 50; backdrop-filter: saturate(1.15) blur(10px);
+  background: color-mix(in oklab, var(--surface) 82%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.nav-center {
+  display: grid;
+  grid-template-rows: auto auto;
+  justify-items: center;
+  align-items: center;
+  gap: .35rem;
+  min-height: 80px;
+}
+.nav-links { display: inline-flex; gap: 1rem; }
+.nav-links a { color: var(--muted); font-weight: 600; }
+.nav-links a.active { color: var(--text); border-bottom: 2px solid var(--brand); padding-bottom: 2px; }
+
+.footer { border-top: 1px solid var(--border); color: var(--muted); }
+
+/* Utility */
+.muted { color: var(--muted); }
+.badge { display:inline-block; padding:.3rem .6rem; border-radius: 999px; border:1px solid var(--border); color: var(--muted); background: transparent; }
+.badge.on { background: var(--brand-2); color: #fff; border-color: var(--brand-2); }
+.spacer { height: 1px; background: var(--border); margin: 1rem 0; }
+.progress { height: 6px; width: 100%; background: rgba(127,127,127,.15); border-radius: 999px; overflow: hidden; }
+.progress > span { display:block; height:100%; width:0%; background: var(--brand); transition: width .2s ease; }
+
+/* Small avatar circle */
+.avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--brand-2); color: #fff; font-weight: 800;
+}
