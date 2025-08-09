@@ -1,8 +1,7 @@
-# render.yaml — Django API on Render (fixed)
-# - Pins Python 3.11 for compatibility
-# - Binds Gunicorn to 0.0.0.0:$PORT
-# - Health check hits /api/ (DRF root)
-# - Runs migrations in preDeployCommand (runtime)
+# render.yaml — Django API on Render (lean + pinned Python)
+# - Uses a small, deploy-only requirements file
+# - Pins Python 3.11 for broad package compatibility
+# - Health-checks /api/ and runs migrations at deploy time
 
 databases:
   - name: royalroad-db
@@ -17,37 +16,46 @@ services:
     plan: starter
     autoDeploy: true
     healthCheckPath: /api/
-    # branch: main   # (optional) defaults to the branch containing render.yaml
 
+    # Build only what production needs
     buildCommand: |
-      pip install -r requirements.txt
-      pip install "whitenoise[brotli]" gunicorn dj-database-url psycopg2-binary
+      pip install -r requirements-render.txt
       python manage.py collectstatic --no-input
 
-    # Run DB migrations in the runtime environment, not during build.
+    # Run DB migrations just before switching traffic
     preDeployCommand: |
       python manage.py migrate
 
-    # IMPORTANT: bind to Render's PORT env on 0.0.0.0
+    # IMPORTANT: bind to Render's assigned PORT
     startCommand: gunicorn royalroad_clone.wsgi:application --bind 0.0.0.0:$PORT
 
     envVars:
+      # Pin Python on Render
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+
+      # Use production settings module
       - key: DJANGO_SETTINGS_MODULE
         value: royalroad_clone.settings_prod
+
+      # Wire DATABASE_URL from the managed Postgres
       - key: DATABASE_URL
         fromDatabase:
           name: royalroad-db
           property: connectionString
+
+      # Generate a strong SECRET_KEY on the platform
       - key: SECRET_KEY
         generateValue: true
-      # Allow Render subdomains; add your custom domain(s) later.
+
+      # Let Django accept Render subdomains; add custom domains later
       - key: ALLOWED_HOSTS
         value: ".onrender.com"
-      # Django requires full scheme for trusted origins; wildcard subdomain allowed.
+
+      # Django requires full scheme for trusted origins
       - key: CSRF_TRUSTED_ORIGINS
         value: "https://*.onrender.com"
-      # Pin Python version (Render defaults to 3.13+ for new services).
-      - key: PYTHON_VERSION
-        value: "3.11.11"
+
+      # Small instance => 1–2 workers is fine; adjust as needed
       - key: WEB_CONCURRENCY
         value: "2"

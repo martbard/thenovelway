@@ -1,0 +1,13 @@
+# Minimal, server-safe dependencies for your Django API on Render
+Django==5.2.4
+djangorestframework==3.16.0
+drf-nested-routers==0.94.2
+django-cors-headers==4.7.0
+django-filter==25.1
+djangorestframework-simplejwt==5.5.0
+
+# Deploy/runtime
+gunicorn==23.0.0
+dj-database-url==3.0.1
+whitenoise[brotli]==6.9.0
+psycopg2-binary==2.9.10
