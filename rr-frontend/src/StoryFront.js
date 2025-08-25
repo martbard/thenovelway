@@ -1,7 +1,7 @@
 // src/StoryFront.js
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import API from './api';
+import API, { unwrapList } from './api';
 import Hero from './Hero';
 
 export default function StoryFront() {
@@ -9,10 +9,17 @@ export default function StoryFront() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    API.get('stories/')
-      .then((res) => setStories(res.data || []))
-      .catch((err) => console.error('Error fetching stories:', err))
-      .finally(() => setLoading(false));
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await API.get('stories/');
+        if (!mounted) return;
+        setStories(unwrapList(res.data) || []);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
   }, []);
 
   return (
@@ -31,7 +38,10 @@ export default function StoryFront() {
             {stories.slice(0, 8).map((story) => (
               <li key={story.id} className="card">
                 <h3 style={{ marginBottom: '.25rem' }}>{story.title}</h3>
-                <p className="muted" style={{ minHeight: '3.4em' }}>{story.summary || 'No summary yet.'}</p>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  by {story.author || story.author_username || 'Unknown'}
+                </p>
+                <p className="muted">{story.summary || 'No summary yet.'}</p>
                 <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginTop: '.5rem' }}>
                   {(story.tags || []).map((t) => <span key={t.id || t} className="badge">{t.name || t}</span>)}
                 </div>

@@ -1,70 +1,87 @@
 // src/api.js
 import axios from 'axios';
 
-const BASE_URL =
-  process.env.REACT_APP_API_BASE_URL?.replace(/\/+$/, '') ||
-  'http://127.0.0.1:8000/api';
+function trimSlash(s) {
+  return String(s || '').replace(/\/+$/, '');
+}
+
+// Figure out the API base URL.
+// In production, set REACT_APP_API_BASE_URL, e.g. https://your-api.onrender.com/api
+const BASE_URL = (() => {
+  const env = trimSlash(process.env.REACT_APP_API_BASE_URL || '');
+  if (env) return env;
+  if (typeof window !== 'undefined') {
+    const guess = trimSlash(`${window.location.origin}/api`);
+    // Helpful warning in dev/prod if env isn’t set
+    // eslint-disable-next-line no-console
+    console.warn(`[api] REACT_APP_API_BASE_URL not set. Guessing: ${guess}`);
+    return guess;
+  }
+  return 'http://127.0.0.1:8000/api';
+})();
 
 const API = axios.create({
   baseURL: `${BASE_URL}/`,
   withCredentials: false,
 });
 
-// Attach access token on every request
+// Attach JWT on every request
 API.interceptors.request.use((config) => {
   const token = localStorage.getItem('access');
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
-// ---- Refresh handling with endpoint fallback ----
+// ----- Refresh token on 401 -----
 let isRefreshing = false;
-let failedQueue = [];
-const processQueue = (error, token = null) => {
-  failedQueue.forEach((p) => {
-    if (token) p.resolve(p.config);
-    else p.reject(error);
+let queue = [];
+
+function processQueue(error, token = null) {
+  queue.forEach(({ resolve, reject }) => {
+    if (token) {
+      resolve(token);
+    } else {
+      reject(error);
+    }
   });
-  failedQueue = [];
-};
-
-async function refreshAccessToken() {
-  const refresh = localStorage.getItem('refresh');
-  if (!refresh) throw new Error('Missing refresh token');
-
-  // Try SimpleJWT default first, then Djoser-style
-  try {
-    const r1 = await axios.post(`${BASE_URL}/token/refresh/`, { refresh });
-    return r1.data?.access;
-  } catch (e1) {
-    if (e1?.response?.status !== 404) throw e1;
-    const r2 = await axios.post(`${BASE_URL}/auth/jwt/refresh/`, { refresh });
-    return r2.data?.access;
-  }
+  queue = [];
 }
 
 API.interceptors.response.use(
   (res) => res,
   async (err) => {
-    const original = err.config || {};
+    const original = err?.config;
     const status = err?.response?.status;
 
-    if (status === 401 && !original._retry) {
+    // If unauthorized and we have a refresh token, try to refresh once
+    if (status === 401 && !original?._retry) {
+      const refresh = localStorage.getItem('refresh');
+      if (!refresh) return Promise.reject(err);
+
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
-          failedQueue.push({ resolve, reject, config: original });
-        }).then((cfg) => API(cfg));
+          queue.push({
+            resolve: (token) => {
+              original.headers.Authorization = `Bearer ${token}`;
+              resolve(API(original));
+            },
+            reject,
+          });
+        });
       }
 
       original._retry = true;
       isRefreshing = true;
 
       try {
-        const access = await refreshAccessToken();
-        if (!access) throw new Error('No access token from refresh');
-        localStorage.setItem('access', access);
-        original.headers = { ...(original.headers || {}), Authorization: `Bearer ${access}` };
-        processQueue(null, access);
+        const { data } = await axios.post(`${BASE_URL}/token/refresh/`, { refresh });
+        const newAccess = data?.access;
+        if (!newAccess) throw new Error('No access token returned from refresh');
+
+        localStorage.setItem('access', newAccess);
+        processQueue(null, newAccess);
+
+        original.headers.Authorization = `Bearer ${newAccess}`;
         return API(original);
       } catch (refreshErr) {
         processQueue(refreshErr, null);
@@ -75,8 +92,14 @@ API.interceptors.response.use(
         isRefreshing = false;
       }
     }
+
     return Promise.reject(err);
   }
 );
+
+// Small helper to normalize paginated/non-paginated shapes
+export function unwrapList(data) {
+  return Array.isArray(data) ? data : (data?.results || []);
+}
 
 export default API;

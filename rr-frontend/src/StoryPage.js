@@ -2,10 +2,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { jwtDecode } from 'jwt-decode';
-import API from './api';
+import API, { unwrapList } from './api';
 import ChapterForm from './ChapterForm';
 
-const normalize = (s) => s?.trim().toLowerCase();
+const normalize = (s) => String(s ?? '').trim().toLowerCase();
+
+function getAuthorName(story) {
+  if (!story) return null;
+  if (typeof story.author === 'string') return story.author;
+  return (
+    story.author?.username ||
+    story.author_username ||
+    story.author_name ||
+    null
+  );
+}
 
 function decodeUsernameFromJWT(token) {
   if (!token) return null;
@@ -24,14 +35,14 @@ function decodeUsernameFromJWT(token) {
 }
 
 async function fetchChaptersFlexible(storyId) {
-  // Try nested first (your backend has this), then flat as fallback
+  // Prefer nested route; fall back to flat filter
   try {
     const r2 = await API.get(`stories/${storyId}/chapters/`);
-    return r2.data || [];
+    return unwrapList(r2.data) || [];
   } catch (e2) {
     if (e2?.response?.status !== 404) throw e2;
     const r = await API.get(`chapters/?story=${storyId}`);
-    return r.data || [];
+    return unwrapList(r.data) || [];
   }
 }
 
@@ -45,7 +56,8 @@ export default function StoryPage() {
 
   // robust current-user detection
   const [currentUser, setCurrentUser] = useState(null);
-  const [checkedMineFallback, setCheckedMineFallback] = useState(false); // for last-resort ownership check
+  const [checkedMineFallback, setCheckedMineFallback] = useState(false); // last-resort ownership check
+  const [isOwner, setIsOwner] = useState(false);
 
   // tag management state (owner only)
   const [allTags, setAllTags] = useState([]);
@@ -53,26 +65,31 @@ export default function StoryPage() {
   const selectedSet = useMemo(() => new Set(selectedNames.map(normalize)), [selectedNames]);
   const [savingTags, setSavingTags] = useState(false);
 
-  // derive isOwner from currentUser + story (and final fallback via /stories/mine/)
-  const [isOwner, setIsOwner] = useState(false);
-
   // 1) Load story, chapters, tags
   useEffect(() => {
+    let mounted = true;
     setLoading(true);
-    Promise.all([
-      API.get(`stories/${storyId}/`).then((r) => r.data),
-      fetchChaptersFlexible(storyId),
-      API.get('tags/').then((r) => r.data || []),
-    ])
-      .then(([storyData, chaps, tags]) => {
+    (async () => {
+      try {
+        const [storyData, chaps, tags] = await Promise.all([
+          API.get(`stories/${storyId}/`).then((r) => r.data),
+          fetchChaptersFlexible(storyId),
+          API.get('tags/').then((r) => unwrapList(r.data) || []),
+        ]);
+        if (!mounted) return;
         setStory(storyData);
-        setChapters((chaps || []).sort((a, b) => (a.position || 0) - (b.position || 0)));
+        setChapters([...chaps].sort((a, b) => (a.position || 0) - (b.position || 0)));
         setAllTags(tags);
         const names = (storyData.tags || []).map((t) => (typeof t === 'string' ? t : t.name));
         setSelectedNames(names);
-      })
-      .catch((e) => console.error('Failed to load story', e))
-      .finally(() => setLoading(false));
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to load story', e);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
   }, [storyId]);
 
   // 2) Figure out who the current user is (token → /me/ fallback)
@@ -93,14 +110,10 @@ export default function StoryPage() {
     })();
   }, []);
 
-  // 3) Compute owner when we have story and currentUser (string compare on username)
+  // 3) Compute owner when we have story and currentUser
   useEffect(() => {
     if (!story) return;
-    const authorName =
-      typeof story.author === 'string'
-        ? story.author
-        : story.author?.username || story.author_name || story.author_username || null;
-
+    const authorName = getAuthorName(story);
     if (authorName && currentUser) {
       setIsOwner(normalize(authorName) === normalize(currentUser));
     } else {
@@ -108,9 +121,9 @@ export default function StoryPage() {
     }
   }, [story, currentUser]);
 
-  // 4) Last-resort: if we still don’t think you’re owner, try /stories/mine/ and see if this id is listed
+  // 4) Last-resort: /stories/mine/ to confirm ownership
   useEffect(() => {
-    if (!story || isOwner || checkedMineFallback === true) return;
+    if (!story || isOwner || checkedMineFallback) return;
     (async () => {
       try {
         const resp = await API.get('stories/mine/');
@@ -139,7 +152,7 @@ export default function StoryPage() {
   };
 
   async function ensureTagIdsFromNames(names) {
-    const byName = new Map(allTags.map((t) => [normalize(t.name), t]));
+    const byName = new Map((allTags || []).map((t) => [normalize(t.name), t]));
     const ids = [];
     const created = [];
 
@@ -155,8 +168,9 @@ export default function StoryPage() {
           byName.set(key, res.data);
         } catch {
           const refreshed = await API.get('tags/');
-          setAllTags(refreshed.data || []);
-          const found = (refreshed.data || []).find((t) => normalize(t.name) === key);
+          const arr = unwrapList(refreshed.data) || [];
+          setAllTags(arr);
+          const found = arr.find((t) => normalize(t.name) === key);
           if (found) ids.push(found.id);
         }
       }
@@ -183,13 +197,14 @@ export default function StoryPage() {
     if (!ok) return;
     try {
       await API.delete(`stories/${storyId}/`);
-      navigate('/my');
+      navigate('/stories'); // safe landing
     } catch {
       alert('Could not delete story. You may not have permission.');
     }
   };
 
   const chapterCount = chapters.length;
+  const authorName = getAuthorName(story) || 'Unknown';
 
   return (
     <section className="container">
@@ -197,11 +212,7 @@ export default function StoryPage() {
         <header style={{ display: 'flex', gap: '1rem', alignItems: 'baseline', justifyContent: 'space-between' }}>
           <div>
             <h1>{story.title}</h1>
-            {story.author && (
-              <p className="muted">
-                by {typeof story.author === 'string' ? story.author : (story.author?.username || 'Unknown')}
-              </p>
-            )}
+            <p className="muted" style={{ marginTop: 0 }}>by {authorName}</p>
             {story.summary && <p className="muted" style={{ marginTop: '.5rem' }}>{story.summary}</p>}
           </div>
 

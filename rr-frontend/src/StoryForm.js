@@ -1,7 +1,7 @@
 // src/StoryForm.js
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import API from './api';
+import API, { unwrapList } from './api';
 
 const SUGGESTED = {
   Genres: [
@@ -18,21 +18,40 @@ const SUGGESTED = {
   ],
 };
 
-const normalize = (s) => s.trim().toLowerCase();
+const normalize = (s) => String(s || '').trim().toLowerCase();
+
+// Map UI -> common backend values; we’ll fall back if API rejects it.
+function toBackendStatus(ui) {
+  return ui === 'COMPLETED' ? 'published' : 'draft';
+}
 
 export default function StoryForm() {
   const navigate = useNavigate();
 
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
-  const [status, setStatus] = useState('ONGOING');
-  const [tagsList, setTagsList] = useState([]);
+  const [status, setStatus] = useState('ONGOING'); // UI value
+  const [tagsList, setTagsList] = useState([]);    // always array
   const [selectedNames, setSelectedNames] = useState([]);
   const [custom, setCustom] = useState('');
   const [filter, setFilter] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
+  // Load tags (normalize array vs paginated)
   useEffect(() => {
-    API.get('tags/').then((res) => setTagsList(res.data || [])).catch(() => setTagsList([]));
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await API.get('tags/'); // trailing slash
+        if (!mounted) return;
+        setTagsList(unwrapList(res.data) || []);
+      } catch {
+        if (!mounted) return;
+        setTagsList([]);
+      }
+    })();
+    return () => { mounted = false; };
   }, []);
 
   const selectedSet = useMemo(() => new Set(selectedNames.map(normalize)), [selectedNames]);
@@ -40,7 +59,7 @@ export default function StoryForm() {
   const toggleName = (name) => {
     const key = normalize(name);
     setSelectedNames((prev) =>
-      prev.map(normalize).includes(key)
+      prev.some((n) => normalize(n) === key)
         ? prev.filter((n) => normalize(n) !== key)
         : [...prev, name]
     );
@@ -52,8 +71,10 @@ export default function StoryForm() {
     setCustom('');
   };
 
+  // Ensure we have tag IDs for each selected name; create missing tags on the fly
   async function ensureTagIdsFromNames(names) {
-    const byName = new Map(tagsList.map((t) => [normalize(t.name), t]));
+    const listArr = Array.isArray(tagsList) ? tagsList : unwrapList(tagsList) || [];
+    const byName = new Map(listArr.map((t) => [normalize(t.name), t]));
     const ids = [];
     const created = [];
 
@@ -61,39 +82,91 @@ export default function StoryForm() {
       const key = normalize(raw);
       if (byName.has(key)) {
         ids.push(byName.get(key).id);
-      } else {
-        try {
-          const res = await API.post('tags/', { name: raw.trim() });
-          ids.push(res.data.id);
-          created.push(res.data);
-          byName.set(key, res.data);
-        } catch {
-          const refreshed = await API.get('tags/');
-          setTagsList(refreshed.data || []);
-          const found = (refreshed.data || []).find((t) => normalize(t.name) === key);
-          if (found) ids.push(found.id);
-        }
+        continue;
+      }
+      try {
+        const res = await API.post('tags/', { name: raw.trim() }); // trailing slash
+        ids.push(res.data.id);
+        created.push(res.data);
+        byName.set(key, res.data);
+      } catch {
+        const refreshed = await API.get('tags/'); // trailing slash
+        const arr = unwrapList(refreshed.data) || [];
+        setTagsList(arr);
+        const found = arr.find((t) => normalize(t.name) === key);
+        if (found) ids.push(found.id);
       }
     }
+
     if (created.length) setTagsList((prev) => [...prev, ...created]);
     return ids;
   }
 
+  async function createWithFallback(payload, uiStatus) {
+    // Try common values first
+    try {
+      const primary = { ...payload, status: toBackendStatus(uiStatus) };
+      return await API.post('stories/', primary); // trailing slash
+    } catch (err) {
+      const res = err?.response;
+      const statusErrors = res?.data && (res.data.status || res.data.detail);
+      const isStatusProblem =
+        res?.status === 400 &&
+        (statusErrors && String(statusErrors).toLowerCase().includes('valid'));
+
+      // If backend rejected status choice, retry with the UI value itself (ONGOING/COMPLETED)
+      if (isStatusProblem) {
+        const secondary = { ...payload, status: uiStatus };
+        return await API.post('stories/', secondary); // trailing slash
+      }
+      throw err; // bubble up
+    }
+  }
+
   const submit = async (e) => {
     e.preventDefault();
-    const tag_ids = await ensureTagIdsFromNames(selectedNames);
-    const payload = { title, summary, status, tag_ids };
-    const res = await API.post('stories/', payload);
-    navigate(`/stories/${res.data.id}`);
-  };
+    setError('');
+    setSaving(true);
+    try {
+      const tag_ids = await ensureTagIdsFromNames(selectedNames);
+      const base = {
+        title: title.trim(),
+        summary: summary.trim(),
+        tag_ids,
+      };
 
-  const filteredNames = (group) =>
-    SUGGESTED[group].filter((n) => !filter || normalize(n).includes(normalize(filter)));
+      const res = await createWithFallback(base, status);
+
+      // Navigate to the new story
+      navigate(`/stories/${res.data?.id ?? ''}`);
+    } catch (err) {
+      const code = err?.response?.status;
+      if (code === 401) {
+        setError('Please sign in to create a story.');
+      } else if (err?.response?.data && typeof err.response.data === 'object') {
+        const parts = [];
+        for (const [k, v] of Object.entries(err.response.data)) {
+          parts.push(`${k}: ${Array.isArray(v) ? v.join(' ') : String(v)}`);
+        }
+        setError(parts.join(' | ') || 'Create failed.');
+      } else {
+        setError('Create failed. Check your connection and try again.');
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <section className="container">
       <div className="surface" style={{ padding: '1rem' }}>
         <h1>Create a new story</h1>
+
+        {error ? (
+          <div role="alert" className="card" style={{ background: 'var(--surface-2)', padding: '.75rem', marginTop: '.5rem' }}>
+            {error}
+          </div>
+        ) : null}
 
         <form onSubmit={submit} style={{ display: 'grid', gap: '1rem', marginTop: '.75rem' }}>
           <div>
@@ -156,7 +229,7 @@ export default function StoryForm() {
             <details style={{ marginTop: '.75rem' }}>
               <summary className="muted" style={{ cursor: 'pointer' }}>Choose from existing tags</summary>
               <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginTop: '.5rem' }}>
-                {tagsList.map((t) => {
+                {(Array.isArray(tagsList) ? tagsList : []).map((t) => {
                   const on = selectedSet.has(normalize(t.name));
                   return (
                     <button
@@ -178,19 +251,21 @@ export default function StoryForm() {
                 <div key={group}>
                   <p className="muted" style={{ fontWeight: 800, marginBottom: '.35rem' }}>{group}</p>
                   <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap' }}>
-                    {filteredNames(group).map((name) => {
-                      const on = selectedSet.has(normalize(name));
-                      return (
-                        <button
-                          key={name}
-                          type="button"
-                          className={`badge ${on ? 'on' : ''}`}
-                          onClick={() => toggleName(name)}
-                        >
-                          {name}
-                        </button>
-                      );
-                    })}
+                    {(SUGGESTED[group] || [])
+                      .filter((n) => !filter || normalize(n).includes(normalize(filter)))
+                      .map((name) => {
+                        const on = selectedSet.has(normalize(name));
+                        return (
+                          <button
+                            key={name}
+                            type="button"
+                            className={`badge ${on ? 'on' : ''}`}
+                            onClick={() => toggleName(name)}
+                          >
+                            {name}
+                          </button>
+                        );
+                      })}
                   </div>
                 </div>
               ))}
@@ -198,7 +273,7 @@ export default function StoryForm() {
           </div>
 
           <div style={{ textAlign: 'right' }}>
-            <button className="btn">Create Story</button>
+            <button className="btn" disabled={saving}>{saving ? 'Saving…' : 'Create Story'}</button>
           </div>
         </form>
       </div>

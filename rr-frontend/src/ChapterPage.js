@@ -1,5 +1,5 @@
 // src/ChapterPage.js
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import API from './api';
 import CommentForm from './CommentForm';
@@ -16,10 +16,19 @@ async function fetchChapterFlexible(storyId, chapterId) {
   }
 }
 
-const loadComments = (chapterId, setComments) =>
-  API.get(`comments/?chapter=${chapterId}`)
-    .then((res) => setComments(res.data || []))
-    .catch((err) => console.error('Error loading comments', err));
+/** Load comments: try nested route first, then fall back to flat query */
+async function fetchCommentsFlexible(storyId, chapterId) {
+  try {
+    const r = await API.get(`stories/${storyId}/chapters/${chapterId}/comments/`);
+    const data = r.data;
+    return Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : []);
+  } catch (e) {
+    if (e?.response?.status !== 404) throw e;
+    const r2 = await API.get(`comments/?chapter=${chapterId}`);
+    const data2 = r2.data;
+    return Array.isArray(data2) ? data2 : (Array.isArray(data2?.results) ? data2.results : []);
+  }
+}
 
 /** --- Lightweight formatter: turn plain text into paragraphs + simple emphasis --- */
 function escapeHtml(s) {
@@ -88,10 +97,23 @@ export default function ChapterPage() {
 
   // Load chapter + comments
   useEffect(() => {
-    fetchChapterFlexible(storyId, chapterId)
-      .then(setChapter)
-      .catch(() => setChapter(null));
-    loadComments(chapterId, setComments);
+    let mounted = true;
+    (async () => {
+      try {
+        const [c, cmts] = await Promise.all([
+          fetchChapterFlexible(storyId, chapterId),
+          fetchCommentsFlexible(storyId, chapterId),
+        ]);
+        if (!mounted) return;
+        setChapter(c || null);
+        setComments(cmts || []);
+      } catch {
+        if (!mounted) return;
+        setChapter(null);
+        setComments([]);
+      }
+    })();
+    return () => { mounted = false; };
   }, [storyId, chapterId]);
 
   // Build HTML (either from backend or from plain text)
@@ -236,6 +258,16 @@ export default function ChapterPage() {
     return () => el.removeEventListener('scroll', onScroll);
   }, [prefs.mode, prefs.width, pages.length, currentPage]);
 
+  // Navigate to page (memoized so hooks deps are satisfied)
+  const goTo = useCallback((idx) => {
+    const el = pageStripRef.current;
+    if (!el) return;
+    const target = Math.max(0, Math.min(pages.length - 1, idx));
+    setCurrentPage(target);
+    const pageW = prefs.width + 16; // width + gap
+    el.scrollTo({ left: target * pageW, behavior: 'smooth' });
+  }, [pages.length, prefs.width]);
+
   // Keyboard navigation in page mode
   useEffect(() => {
     if (prefs.mode !== 'pages') return;
@@ -245,16 +277,7 @@ export default function ChapterPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [prefs.mode, currentPage, pages.length]);
-
-  const goTo = (idx) => {
-    const el = pageStripRef.current;
-    if (!el) return;
-    const target = Math.max(0, Math.min(pages.length - 1, idx));
-    setCurrentPage(target);
-    const pageW = prefs.width + 16; // width + gap
-    el.scrollTo({ left: target * pageW, behavior: 'smooth' });
-  };
+  }, [prefs.mode, currentPage, pages.length, goTo]);
 
   // Shared reader style
   const baseReaderStyle = {
@@ -301,7 +324,6 @@ export default function ChapterPage() {
               onChange={(e) => setPrefs((p) => ({ ...p, mode: e.target.value }))}
               aria-label="Reading mode"
             >
-              {/* Renamed for clarity per your feedback */}
               <option value="scroll">Vertical (scroll up/down)</option>
               <option value="pages">Horizontal (pages left/right)</option>
             </select>
@@ -425,12 +447,15 @@ export default function ChapterPage() {
             {comments.map((c) => (
               <li key={c.id} style={{ padding: '.6rem 0', borderBottom: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <strong>{c.author_name || 'Reader'}</strong>
+                  <strong>{c.author?.username || c.author_name || c.author || 'Reader'}</strong>
                   <span className="muted" style={{ fontSize: '.85rem' }}>
-                    {c.created_at ? new Date(c.created_at).toLocaleString() : ''}
+                    {(() => {
+                      const ts = c.created_at || c.created || c.timestamp;
+                      return ts ? new Date(ts).toLocaleString() : '';
+                    })()}
                   </span>
                 </div>
-                <p style={{ margin: '.25rem 0 0' }}>{c.content}</p>
+                <p style={{ margin: '.25rem 0 0' }}>{c.content || c.text || c.body || ''}</p>
               </li>
             ))}
           </ul>
@@ -440,7 +465,11 @@ export default function ChapterPage() {
 
         {localStorage.getItem('access') && (
           <div className="surface" style={{ padding: '1rem', marginTop: '1rem' }}>
-            <CommentForm chapterId={chapterId} onNewComment={(c) => setComments((prev) => [c, ...prev])} />
+            <CommentForm
+              storyId={storyId}
+              chapterId={chapterId}
+              onCreated={(c) => setComments((prev) => [c, ...prev])}
+            />
           </div>
         )}
       </section>

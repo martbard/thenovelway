@@ -1,77 +1,102 @@
 // src/api.js
-
 import axios from 'axios';
 
-// Create an axios instance for our API
+function trimSlash(s) {
+  return String(s || '').replace(/\/+$/, '');
+}
+
+const BASE_URL = (() => {
+  const env = trimSlash(process.env.REACT_APP_API_BASE_URL || '');
+  if (env) return env;
+  if (typeof window !== 'undefined') {
+    const { hostname, port } = window.location;
+    const isLocalDev = (hostname === 'localhost' || hostname === '127.0.0.1') && port === '3000';
+    if (isLocalDev) return 'http://127.0.0.1:8000/api';
+    return `${window.location.origin}/api`;
+  }
+  return 'http://127.0.0.1:8000/api';
+})();
+
 const API = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api/',
+  // ensure baseURL ends with a single slash
+  baseURL: `${trimSlash(BASE_URL)}/`,
+  withCredentials: false,
 });
 
-// Attach the access token to every request
-API.interceptors.request.use(config => {
-  const token = localStorage.getItem('access');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+// Always: no leading slash, yes trailing slash
+API.interceptors.request.use((config) => {
+  let url = String(config.url || '');
+  // strip any leading slash so baseURL isn't ignored
+  url = url.replace(/^\/+/, '');
+  // add trailing slash if there is no querystring
+  if (url && !url.endsWith('/') && !url.includes('?')) {
+    url = `${url}/`;
   }
+  config.url = url;
+
+  const token = localStorage.getItem('access');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
-}, error => Promise.reject(error));
+});
 
-// Handle 401s by attempting token refresh
+// ----- Refresh token on 401 -----
 let isRefreshing = false;
-let failedQueue = [];
-
-const processQueue = (error, token = null) => {
-  failedQueue.forEach(prom => {
-    if (error) {
-      prom.reject(error);
-    } else {
-      prom.resolve(token);
-    }
-  });
-  failedQueue = [];
-};
+let queue = [];
+function processQueue(error, token = null) {
+  queue.forEach(({ resolve, reject }) => (token ? resolve(token) : reject(error)));
+  queue = [];
+}
 
 API.interceptors.response.use(
-  response => response,
-  err => {
-    const originalReq = err.config;
-    if (err.response && err.response.status === 401 && !originalReq._retry) {
-      originalReq._retry = true;
-      const refreshToken = localStorage.getItem('refresh');
-      if (!refreshToken) {
-        return Promise.reject(err);
-      }
+  (res) => res,
+  async (err) => {
+    const original = err?.config;
+    const status = err?.response?.status;
+
+    if (status === 401 && !original?._retry) {
+      const refresh = localStorage.getItem('refresh');
+      if (!refresh) return Promise.reject(err);
+
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
-          failedQueue.push({ resolve, reject });
-        })
-        .then(token => {
-          originalReq.headers.Authorization = `Bearer ${token}`;
-          return API(originalReq);
+          queue.push({
+            resolve: (token) => {
+              original.headers.Authorization = `Bearer ${token}`;
+              resolve(API(original));
+            },
+            reject,
+          });
         });
       }
 
+      original._retry = true;
       isRefreshing = true;
-      return new Promise((resolve, reject) => {
-        axios.post('http://127.0.0.1:8000/api/token/refresh/', { refresh: refreshToken })
-          .then(({ data }) => {
-            localStorage.setItem('access', data.access);
-            API.defaults.headers.Authorization = `Bearer ${data.access}`;
-            processQueue(null, data.access);
-            originalReq.headers.Authorization = `Bearer ${data.access}`;
-            resolve(API(originalReq));
-          })
-          .catch(refreshError => {
-            processQueue(refreshError, null);
-            reject(refreshError);
-          })
-          .finally(() => {
-            isRefreshing = false;
-          });
-      });
+      try {
+        const { data } = await axios.post(`${trimSlash(BASE_URL)}/token/refresh/`, { refresh });
+        const newAccess = data?.access;
+        if (!newAccess) throw new Error('No access token returned from refresh');
+
+        localStorage.setItem('access', newAccess);
+        processQueue(null, newAccess);
+
+        original.headers.Authorization = `Bearer ${newAccess}`;
+        return API(original);
+      } catch (refreshErr) {
+        processQueue(refreshErr, null);
+        localStorage.removeItem('access');
+        localStorage.removeItem('refresh');
+        return Promise.reject(refreshErr);
+      } finally {
+        isRefreshing = false;
+      }
     }
     return Promise.reject(err);
   }
 );
+
+// Normalize array vs. {results: [...]}
+export function unwrapList(data) {
+  return Array.isArray(data) ? data : (data?.results || []);
+}
 
 export default API;

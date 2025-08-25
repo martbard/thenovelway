@@ -1,66 +1,96 @@
 // src/MyStories.js
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import API from './api';
+import { Link, useNavigate } from 'react-router-dom';
+import API, { unwrapList } from './api';
 
 export default function MyStories() {
   const navigate = useNavigate();
-  const [stories, setStories] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState('');
 
-  const load = () => {
+  useEffect(() => {
+    let mounted = true;
     setLoading(true);
-    API.get('stories/mine/')
-      .then((res) => setStories(res.data || []))
-      .catch(() => setStories([]))
-      .finally(() => setLoading(false));
-  };
+    (async () => {
+      try {
+        const res = await API.get('stories/mine/');
+        const data = res?.data;
+        // Be robust to either an array or a paginated object
+        const list = unwrapList
+          ? unwrapList(data)
+          : (Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : []));
+        if (mounted) setItems(list || []);
+      } catch (e) {
+        if (!mounted) return;
+        const code = e?.response?.status;
+        setError(code === 401 ? 'Please sign in to view your stories.' : 'Could not load your stories.');
+        setItems([]);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
 
-  useEffect(() => { load(); }, []);
-
-  const del = async (id) => {
+  const onDelete = async (id) => {
     const ok = window.confirm('Delete this story? This cannot be undone.');
     if (!ok) return;
     try {
       await API.delete(`stories/${id}/`);
-      load();
+      setItems((prev) => prev.filter((s) => String(s.id) !== String(id)));
     } catch {
-      alert('Could not delete story. You may not have permission.');
+      alert('Delete failed. You may not have permission.');
     }
   };
 
+  if (loading) return <section className="container"><p className="muted">Loading…</p></section>;
+  if (error)   return <section className="container"><p className="muted">{error}</p></section>;
+
   return (
     <section className="container">
-      <header className="surface" style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h1>My Stories</h1>
-          <p className="muted">Create, edit, and manage your stories.</p>
-        </div>
-        <button className="btn" onClick={() => navigate('/stories/new')}>New Story</button>
-      </header>
+      <div className="surface" style={{ padding: '1rem' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <h1>My stories</h1>
+          <Link className="btn" to="/stories/new">Create new</Link>
+        </header>
 
-      {loading ? (
-        <p className="muted" style={{ marginTop: '1rem' }}>Loading…</p>
-      ) : !stories.length ? (
-        <p className="muted" style={{ marginTop: '1rem' }}>You have no stories yet. Start by creating one.</p>
-      ) : (
-        <ul className="grid cards" style={{ marginTop: '1rem' }}>
-          {stories.map((s) => (
-            <li key={s.id} className="card">
-              <h3>{s.title}</h3>
-              <p className="muted">{s.summary || 'No summary yet.'}</p>
-              <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginTop: '.5rem' }}>
-                {(s.tags || []).map((t) => <span key={t.id || t} className="badge">{t.name || t}</span>)}
-              </div>
-              <div style={{ display: 'flex', gap: '.5rem', marginTop: '.75rem' }}>
-                <button className="btn" onClick={() => navigate(`/stories/${s.id}`)}>Open</button>
-                <button className="btn ghost" onClick={() => navigate(`/stories/${s.id}/edit`)}>Edit</button>
-                <button className="btn" onClick={() => del(s.id)}>Delete</button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+        {!items.length ? (
+          <p className="muted" style={{ marginTop: '.75rem' }}>
+            You don’t have any stories yet. <Link to="/stories/new">Create your first one</Link>.
+          </p>
+        ) : (
+          <ul style={{ listStyle: 'none', padding: 0, marginTop: '1rem', display: 'grid', gap: '.75rem' }}>
+            {items.map((s) => (
+              <li key={s.id} className="card" style={{ padding: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+                  <div>
+                    <Link to={`/stories/${s.id}`} style={{ fontWeight: 700, fontSize: '1.05rem' }}>{s.title}</Link>
+                    <p className="muted" style={{ margin: '.25rem 0' }}>
+                      by {typeof s.author === 'string' ? s.author : (s.author?.username || s.author_username || 'You')}
+                    </p>
+                    {s.summary && <p className="muted" style={{ margin: '.25rem 0 0' }}>{s.summary}</p>}
+                  </div>
+                  <div style={{ display: 'flex', gap: '.5rem', alignItems: 'start' }}>
+                    <button className="btn ghost" onClick={() => navigate(`/stories/${s.id}/edit`)}>Edit</button>
+                    <button className="btn danger" onClick={() => onDelete(s.id)}>Delete</button>
+                  </div>
+                </div>
+
+                {(Array.isArray(s.tags) && s.tags.length) ? (
+                  <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginTop: '.5rem' }}>
+                    {s.tags.map((t) => (
+                      <span key={typeof t === 'string' ? t : t.id} className="badge">
+                        {typeof t === 'string' ? t : t.name}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }

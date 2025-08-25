@@ -1,8 +1,7 @@
 // src/StoryList.js
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import API from './api';
-import { jwtDecode } from 'jwt-decode';
+import API, { unwrapList } from './api';
 
 export default function StoryList() {
   const navigate = useNavigate();
@@ -10,26 +9,44 @@ export default function StoryList() {
   const [tags, setTags] = useState([]);
   const [selectedTag, setSelectedTag] = useState('');
   const [query, setQuery] = useState('');
-
-  const token = localStorage.getItem('access');
-  const user = token ? jwtDecode(token)?.username : null;
+  const [me, setMe] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    API.get('stories/').then((res) => setStories(res.data || [])).catch(console.error);
-    API.get('tags/').then((res) => setTags(res.data || [])).catch(() => setTags([]));
+    let mounted = true;
+    (async () => {
+      try {
+        const [tagsRes, storiesRes, meRes] = await Promise.allSettled([
+          API.get('tags/'),
+          API.get('stories/'),
+          API.get('me/'),
+        ]);
+        if (mounted && tagsRes.status === 'fulfilled') setTags(unwrapList(tagsRes.value.data) || []);
+        if (mounted && storiesRes.status === 'fulfilled') setStories(unwrapList(storiesRes.value.data) || []);
+        if (mounted && meRes.status === 'fulfilled') setMe(meRes.value.data);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
   }, []);
 
-  const filtered = stories.filter((s) => {
-    const tagMatch = !selectedTag || (s.tags || []).some((t) => String(t.id || t) === String(selectedTag));
-    const textMatch = !query || (s.title?.toLowerCase().includes(query.toLowerCase()) || s.summary?.toLowerCase().includes(query.toLowerCase()));
-    return tagMatch && textMatch;
-  });
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return stories.filter((s) => {
+      const matchesQuery = !q || (s.title || '').toLowerCase().includes(q) || (s.summary || '').toLowerCase().includes(q);
+      const matchesTag = !selectedTag || (Array.isArray(s.tags) && s.tags.some((t) => String(t.id) === String(selectedTag)));
+      return matchesQuery && matchesTag;
+    });
+  }, [stories, query, selectedTag]);
+
+  const isMine = (story) => me && (story.author === me.username || story.author_username === me.username);
 
   return (
     <section className="container" style={{ display: 'grid', gap: '1rem' }}>
       <header className="surface" style={{ padding: '1rem' }}>
         <h1>Stories</h1>
-        <p className="muted">Browse all stories{user ? ` — welcome back, ${user}` : ''}.</p>
+        <p className="muted">Browse all stories{me ? ` — welcome back, ${me.username}` : ''}.</p>
 
         <div style={{ display: 'grid', gap: '.75rem', gridTemplateColumns: '1fr 220px' }}>
           <input
@@ -53,18 +70,28 @@ export default function StoryList() {
         </div>
       </header>
 
-      {filtered.length ? (
+      {loading ? (
+        <p className="muted" style={{ padding: '1rem' }}>Loading…</p>
+      ) : filtered.length ? (
         <ul className="grid cards">
           {filtered.map((story) => (
             <li key={story.id} className="card">
-              <h3>{story.title}</h3>
+              <h3 style={{ marginBottom: '.25rem' }}>{story.title}</h3>
+              <p className="muted" style={{ marginTop: 0 }}>
+                by {story.author || story.author_username || 'Unknown'}
+              </p>
               <p className="muted">{story.summary || 'No summary yet.'}</p>
               <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginTop: '.5rem' }}>
                 {(story.tags || []).map((t) => <span key={t.id || t} className="badge">{t.name || t}</span>)}
               </div>
               <div style={{ display: 'flex', gap: '.5rem', marginTop: '.75rem' }}>
-                <button className="btn" onClick={() => navigate(`/stories/${story.id}`)}>Open</button>
-                <button className="btn ghost" onClick={() => navigate(`/stories/${story.id}#chapters`)}>Chapters</button>
+                <button className="btn ghost" onClick={() => navigate(`/stories/${story.id}`)}>Read</button>
+                {isMine(story) && (
+                  <>
+                    <button className="btn ghost" onClick={() => navigate(`/stories/${story.id}/edit`)}>Edit</button>
+                    <button className="btn ghost" onClick={() => navigate(`/stories/${story.id}/chapters/new`)}>Add chapter</button>
+                  </>
+                )}
               </div>
             </li>
           ))}
